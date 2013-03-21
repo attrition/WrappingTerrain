@@ -16,7 +16,7 @@ public class Terrain : MonoBehaviour
     public int ChunkSize = 16;
 
     public Texture2D HeightMapDebug = null;
-    public float[] heightMap = null;
+    public float[] HeightMap = null;
 
     private List<TerrainChunk> chunks = null;
 
@@ -34,20 +34,59 @@ public class Terrain : MonoBehaviour
 
     void GenerateHeightMap()
     {
+        if (MapHeight > MapWidth)
+            MapHeight = MapWidth; // height must be at most equal to width, noise uses width as its maximum to allow wrapping
         var perlin = new LibNoise.Unity.Generator.Perlin(Frequency, Lacunarity, Persistence, Octaves, Seed, LibNoise.Unity.QualityMode.High);
-        var noise = new LibNoise.Unity.Noise2D(Mathf.Max(MapWidth, MapHeight), perlin);
-        noise.GeneratePlanar(0f, 1f, 0f, 1f);
+        var noise = new LibNoise.Unity.Noise2D(MapWidth, perlin);
+        noise.GeneratePlanar(0f, 1f, 0f, 1f, true);
 
         if (HeightMapDebug != null)
             Destroy(HeightMapDebug);
 
         HeightMapDebug = noise.GetTexture(LibNoise.Unity.Gradient.Grayscale);
         HeightMapDebug.Apply();
-        
-        heightMap = new float[MapWidth * MapHeight];
+
+        float lo = float.PositiveInfinity;
+        float hi = float.NegativeInfinity;
+        float mid = 0f;
+        float avg = 0f;
+
+        HeightMap = new float[MapWidth * MapHeight];
+
+        // first pass, get lo/hi/mid/avg
         for (int y = 0; y < MapHeight; y++)
+        {
             for (int x = 0; x < MapWidth; x++)
-                heightMap[y * MapWidth + x] = noise[x, y];
+            {
+                var val = noise[x, y];
+                if (val < lo)
+                    lo = val;
+
+                if (val > hi)
+                    hi = val;
+
+                avg += val;
+            }
+        }
+        avg /= HeightMap.Length;
+        mid = (hi + lo) / 2;
+
+        Debug.Log("avg: " + avg + " | mid: " + mid);
+
+        // second pass, assign terraced heightmap
+        for (int y = 0; y < MapHeight; y++)
+        {
+            for (int x = 0; x < MapWidth; x++)
+            {
+                var val = noise[x, y];
+                if (val < mid)
+                    val = 0f;
+                else
+                    val = 1f;
+
+                HeightMap[y * MapWidth + x] = val;
+            }
+        }
     }
 
     void GenerateMeshes()
@@ -56,6 +95,12 @@ public class Terrain : MonoBehaviour
         {
             Debug.Log("Tried to generate terrain mesh, but heightmap is null");
             return;
+        }
+
+        if (chunks != null)
+        {
+            foreach (var chunk in chunks)
+                Destroy(chunk.gameObject);
         }
 
         chunks = new List<TerrainChunk>();
@@ -79,20 +124,31 @@ public class Terrain : MonoBehaviour
                 {
                     for (int x = 0; x < ChunkSize; x++)
                     {
-                        verts.Add(new Vector3(x, GetHeightAt(offsetX + x, offsetY + y), y));
+                        var absX = x + offsetX;
+                        var absY = y + offsetY;
+
+                        var height = GetHeightAt(absX, absY);
+
+                        if (height == 0f)
+                            continue;
+                        
+                        verts.Add(new Vector3(x, height, y));
+                        verts.Add(new Vector3(x, height, y + 1));
+                        verts.Add(new Vector3(x + 1, height, y + 1));
+                        verts.Add(new Vector3(x + 1, height, y));
+
+                        uvs.Add(new Vector2(x, y + 1));
                         uvs.Add(new Vector2(x, y));
+                        uvs.Add(new Vector2(x + 1, y));
+                        uvs.Add(new Vector2(x + 1, y + 1));
 
-                        if (x < ChunkSize - 1 && y < ChunkSize - 1)
-                        {
-                            idxs.Add(i);
-                            idxs.Add(i + ChunkSize);
-                            idxs.Add(i + ChunkSize + 1);
-
-                            idxs.Add(i + ChunkSize + 1);
-                            idxs.Add(i + 1);
-                            idxs.Add(i);
-                        }
-                        i++;
+                        idxs.Add(i);
+                        idxs.Add(i + 1);
+                        idxs.Add(i + 2);
+                        idxs.Add(i + 2);
+                        idxs.Add(i + 3);
+                        idxs.Add(i);
+                        i += 4;
                     }
                 }
 
@@ -112,7 +168,7 @@ public class Terrain : MonoBehaviour
 
                 chunk.Mesh = mesh;
                 chunk.Material = Resources.Load("Materials/Terrain") as Material;
-                chunk.Material.color = new Color(0f, 0.8f, 0f, 1f);
+                chunk.Material.color = new Color(chunkX / (float)chunksX, chunkY / (float)chunksY, 0f, 1f);
 
                 chunks.Add(chunk);
             }
@@ -121,58 +177,38 @@ public class Terrain : MonoBehaviour
 
     float GetHeightAt(int x, int y)
     {
-        return heightMap[y * MapWidth + x];
+        return HeightMap[y * MapWidth + x];
     }
 
     /* Old style
-    void GenerateOldStyle()
-    {
-        chunks = new List<TerrainChunk>();
+                for (int y = 0; y < ChunkSize; y++)
+                {
+                    for (int x = 0; x < ChunkSize; x++)
+                    {
+                        verts.Add(new Vector3(x, GetHeightAt(offsetX + x, offsetY + y), y));
+                        uvs.Add(new Vector2(x, y));
 
-        var chunksX = MapWidth / CHUNK_SIZE;
-        for (int x = 0; x < chunksX; x++)
-        {
-            float offsetX = x * CHUNK_SIZE;
+                        if (x < ChunkSize - 1 && y < ChunkSize - 1)
+                        {
+                            idxs.Add(i);
+                            idxs.Add(i + ChunkSize);
+                            idxs.Add(i + ChunkSize + 1);
 
-            var chunkObj = new GameObject("Terrain Chunk " + x);
-            chunkObj.transform.position = new Vector3(offsetX, 0f, 0f);
-            chunkObj.transform.parent = this.transform;
-
-            var chunk = chunkObj.AddComponent<TerrainChunk>();
-            var mesh = new Mesh();
-
-            mesh.vertices = new[] {
-                new Vector3(0f, 0f, 0f),
-                new Vector3(0f, 0f, MapHeight),
-                new Vector3(CHUNK_SIZE, 0f, MapHeight),
-                new Vector3(CHUNK_SIZE, 0f, 0f)
-            };
-
-            mesh.triangles = new[] {
-                0, 1, 2, 2, 3, 0
-            };
-
-            mesh.uv = new[] {
-                new Vector2(0f, 0f),
-                new Vector2(0f, 1f),
-                new Vector2(1f, 1f),
-                new Vector2(1f, 0f)
-            };
-
-            mesh.RecalculateNormals();
-
-            chunk.Mesh = mesh;
-            chunk.Material = Resources.Load("Materials/Terrain") as Material;
-            chunk.Material.color = new Color(0f, offsetX / MapWidth, 0f, 1f);
-
-            chunks.Add(chunk);
-        }
-    }
+                            idxs.Add(i + ChunkSize + 1);
+                            idxs.Add(i + 1);
+                            idxs.Add(i);
+                        }
+                        i++;
+                    }
+                }
     */
 
     // Update is called once per frame
     void Update()
     {
+        if (Input.GetKeyDown(KeyCode.Space))
+            GenerateMap();
+
         var moveX = 0f;
         var moveY = 0f;
 
