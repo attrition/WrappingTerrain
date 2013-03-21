@@ -20,6 +20,11 @@ public class Terrain : MonoBehaviour
 
     private List<TerrainChunk> chunks = null;
 
+    private float HighestPoint = 0f;
+    private float LowestPoint = 0f;
+
+    public float WaterLevel = 68f;
+
     // Use this for initialization
     void Start()
     {
@@ -46,10 +51,8 @@ public class Terrain : MonoBehaviour
         HeightMapDebug = noise.GetTexture(LibNoise.Unity.Gradient.Grayscale);
         HeightMapDebug.Apply();
 
-        float lo = float.PositiveInfinity;
-        float hi = float.NegativeInfinity;
-        float mid = 0f;
-        float avg = 0f;
+        LowestPoint = float.PositiveInfinity;
+        HighestPoint = float.NegativeInfinity;
 
         HeightMap = new float[MapWidth * MapHeight];
 
@@ -59,19 +62,13 @@ public class Terrain : MonoBehaviour
             for (int x = 0; x < MapWidth; x++)
             {
                 var val = noise[x, y];
-                if (val < lo)
-                    lo = val;
+                if (val < LowestPoint)
+                    LowestPoint = val;
 
-                if (val > hi)
-                    hi = val;
-
-                avg += val;
+                if (val > HighestPoint)
+                    HighestPoint = val;
             }
         }
-        avg /= HeightMap.Length;
-        mid = (hi + lo) / 2;
-
-        Debug.Log("avg: " + avg + " | mid: " + mid);
 
         // second pass, assign terraced heightmap
         for (int y = 0; y < MapHeight; y++)
@@ -79,11 +76,6 @@ public class Terrain : MonoBehaviour
             for (int x = 0; x < MapWidth; x++)
             {
                 var val = noise[x, y];
-                if (val < mid)
-                    val = 0f;
-                else
-                    val = 1f;
-
                 HeightMap[y * MapWidth + x] = val;
             }
         }
@@ -129,7 +121,7 @@ public class Terrain : MonoBehaviour
 
                         var height = GetHeightAt(absX, absY);
 
-                        if (height == 0f)
+                        if (height < GetHeight(WaterLevel))
                             continue;
                         
                         verts.Add(new Vector3(x, height, y));
@@ -180,28 +172,10 @@ public class Terrain : MonoBehaviour
         return HeightMap[y * MapWidth + x];
     }
 
-    /* Old style
-                for (int y = 0; y < ChunkSize; y++)
-                {
-                    for (int x = 0; x < ChunkSize; x++)
-                    {
-                        verts.Add(new Vector3(x, GetHeightAt(offsetX + x, offsetY + y), y));
-                        uvs.Add(new Vector2(x, y));
-
-                        if (x < ChunkSize - 1 && y < ChunkSize - 1)
-                        {
-                            idxs.Add(i);
-                            idxs.Add(i + ChunkSize);
-                            idxs.Add(i + ChunkSize + 1);
-
-                            idxs.Add(i + ChunkSize + 1);
-                            idxs.Add(i + 1);
-                            idxs.Add(i);
-                        }
-                        i++;
-                    }
-                }
-    */
+    float GetHeight(float percent)
+    {
+        return (percent / 100f) * (HighestPoint - LowestPoint) + LowestPoint;
+    }
 
     // Update is called once per frame
     void Update()
