@@ -1,6 +1,19 @@
 using UnityEngine;
 using System.Collections.Generic;
 
+public enum PlotType
+{
+    Water,
+    Land,
+    Hill,
+    Mountain,
+    Forest,
+    Desert,
+    Tundra,
+    Swamp,
+    River,
+}
+
 public class Terrain : MonoBehaviour
 {
     public float MoveSpeed = 32f;
@@ -15,8 +28,8 @@ public class Terrain : MonoBehaviour
     public int MapHeight = 16;
     public int ChunkSize = 16;
 
-    public Texture2D HeightMapDebug = null;
     public float[] HeightMap = null;
+    public PlotType[] PlotMap = null;
 
     private List<TerrainChunk> chunks = null;
 
@@ -39,29 +52,19 @@ public class Terrain : MonoBehaviour
 
     void GenerateHeightMap()
     {
-        if (MapHeight > MapWidth)
-            MapHeight = MapWidth; // height must be at most equal to width, noise uses width as its maximum to allow wrapping
-        var perlin = new LibNoise.Unity.Generator.Perlin(Frequency, Lacunarity, Persistence, Octaves, Seed, LibNoise.Unity.QualityMode.High);
-        var noise = new LibNoise.Unity.Noise2D(MapWidth, perlin);
-        noise.GeneratePlanar(0f, 1f, 0f, 1f, true);
-
-        if (HeightMapDebug != null)
-            Destroy(HeightMapDebug);
-
-        HeightMapDebug = noise.GetTexture(LibNoise.Unity.Gradient.Grayscale);
-        HeightMapDebug.Apply();
-
         LowestPoint = float.PositiveInfinity;
         HighestPoint = float.NegativeInfinity;
 
-        HeightMap = new float[MapWidth * MapHeight];
+        //HeightMap = GetHeightMap();
+        HeightMap = GetDiamondSquareMap();
+        PlotMap = new PlotType[MapWidth * MapHeight];
 
         // first pass, get lo/hi/mid/avg
         for (int y = 0; y < MapHeight; y++)
         {
             for (int x = 0; x < MapWidth; x++)
             {
-                var val = noise[x, y];
+                var val = HeightMap[GetIndex(x, y)];
                 if (val < LowestPoint)
                     LowestPoint = val;
 
@@ -75,15 +78,96 @@ public class Terrain : MonoBehaviour
         {
             for (int x = 0; x < MapWidth; x++)
             {
-                var val = noise[x, y];
-                HeightMap[y * MapWidth + x] = val;
+                PlotType plot = PlotType.Land;
+                if (HeightMap[GetIndex(x, y)] <= GetHeight(WaterLevel))
+                    plot = PlotType.Water;
+
+                PlotMap[GetIndex(x, y)] = plot;
             }
         }
     }
 
+    float[] GetDiamondSquareMap()
+    {
+        Random.seed = Seed;
+        if (MapHeight > MapWidth)
+            MapHeight = MapWidth; // height must be at most equal to width, noise uses width as its maximum to allow wrapping
+
+        var heights = new float[MapWidth * MapHeight];
+        var left = 0;
+        var right = MapWidth - 1;
+        var top = 0;
+        var bottom = MapHeight - 1;
+
+        var baseHeight = 1000f;
+
+        DiamondSquareR(ref heights, left, top, right, bottom, baseHeight);
+
+        return heights;
+    }
+
+    void DiamondSquareR(ref float[] map, int left, int top, int right, int bottom, float baseHeight)
+    {
+        int xc = (int)Mathf.Floor((left + right) / 2);
+        int yc = (int)Mathf.Floor((top + bottom) / 2);
+
+        // diamond step
+        
+        var cv = Mathf.Floor(
+            (
+                map[GetIndex(left, top)] +
+                map[GetIndex(right, top)] +
+                map[GetIndex(left, bottom)] +
+                map[GetIndex(right, bottom)]
+            ) / 4
+        ) - (Mathf.Floor(Random.Range(0f, 1f) - 0.5f) * baseHeight * 2);
+        
+        map[GetIndex(xc, yc)] = cv;
+
+        // square step
+
+        map[GetIndex(xc, top)] = Mathf.Floor(map[GetIndex(left, top)] + map[GetIndex(right, top)]) / 2 + ((Random.Range(0f, 1f) - 0.5f) * baseHeight);
+        map[GetIndex(xc, bottom)] = Mathf.Floor(map[GetIndex(left, bottom)] + map[GetIndex(right, bottom)]) / 2 + ((Random.Range(0f, 1f) - 0.5f) * baseHeight);
+        map[GetIndex(left, yc)] = Mathf.Floor(map[GetIndex(left, top)] + map[GetIndex(left, bottom)]) / 2 + ((Random.Range(0f, 1f) - 0.5f) * baseHeight);
+        map[GetIndex(right, yc)] = Mathf.Floor(map[GetIndex(right, top)] + map[GetIndex(right, bottom)]) / 2 + ((Random.Range(0f, 1f) - 0.5f) * baseHeight);
+
+        if (right - left > 2)
+        {
+            baseHeight = Mathf.Floor(baseHeight * Mathf.Pow(2f, -0.75f));
+
+            DiamondSquareR(ref map, left, top, xc, yc, baseHeight);
+            DiamondSquareR(ref map, xc, top, right, yc, baseHeight);
+            DiamondSquareR(ref map, left, yc, xc, bottom, baseHeight);
+            DiamondSquareR(ref map, xc, yc, right, bottom, baseHeight);
+        }
+    }
+
+    int GetIndex(int x, int y)
+    {
+        return y * MapWidth + x;
+    }
+
+    float[] GetHeightMap()
+    {
+        if (MapHeight > MapWidth)
+            MapHeight = MapWidth; // height must be at most equal to width, noise uses width as its maximum to allow wrapping
+
+        var perlin = new LibNoise.Unity.Generator.Perlin(Frequency, Lacunarity, Persistence, Octaves, Seed, LibNoise.Unity.QualityMode.High);
+        var noise = new LibNoise.Unity.Noise2D(MapWidth, perlin);
+        noise.GeneratePlanar(0f, 1f, 0f, 1f, true);
+
+        var heights = new float[MapWidth * MapHeight];
+
+        for (int y = 0; y < MapHeight; y++)
+            for (int x = 0; x < MapWidth; x++)
+                heights[GetIndex(x, y)] = noise[x, y];
+
+        return heights;
+    }
+
     void GenerateMeshes()
     {
-        if (HeightMapDebug == null)
+        if (HeightMap == null)
         {
             Debug.Log("Tried to generate terrain mesh, but heightmap is null");
             return;
@@ -119,11 +203,11 @@ public class Terrain : MonoBehaviour
                         var absX = x + offsetX;
                         var absY = y + offsetY;
 
-                        var height = GetHeightAt(absX, absY);
-
-                        if (height < GetHeight(WaterLevel))
+                        // most everything is at 1f, excepting water and possibly coasts
+                        var height = 1f;// GetHeightAt(x, y);
+                        if (PlotMap[GetIndex(absX, absY)] == PlotType.Water)
                             continue;
-                        
+
                         verts.Add(new Vector3(x, height, y));
                         verts.Add(new Vector3(x, height, y + 1));
                         verts.Add(new Vector3(x + 1, height, y + 1));
