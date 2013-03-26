@@ -133,7 +133,7 @@ public class Terrain : MonoBehaviour
 
         if (right - left > 2)
         {
-            baseHeight = Mathf.Floor(baseHeight * Mathf.Pow(2f, -0.75f));
+            baseHeight = Mathf.Floor(baseHeight * Mathf.Pow(2f, -0.90f));
 
             DiamondSquareR(ref map, left, top, xc, yc, baseHeight);
             DiamondSquareR(ref map, xc, top, right, yc, baseHeight);
