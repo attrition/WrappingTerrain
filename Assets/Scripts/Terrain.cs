@@ -5,6 +5,7 @@ public enum PlotType
 {
     Water,
     Land,
+    Coast,
     Hill,
     Mountain,
     Forest,
@@ -37,10 +38,26 @@ public class Terrain : MonoBehaviour
     private float LowestPoint = 0f;
 
     public float WaterLevel = 68f;
+    private Dictionary<PlotType, float> PlotHeights = new Dictionary<PlotType, float>
+    {
+        { PlotType.Water, 0f },
+        { PlotType.Coast, 0.5f },
+        { PlotType.Land, 1f },
+    };
+
+    private delegate void PlotMeshFunc(int x, int y, int absX, int absY, List<Vector3> verts, List<int> idxs, List<Vector2> uv1, List<Vector2> uv2, List<Vector3> normals, ref int vertCount);
+    private Dictionary<PlotType, PlotMeshFunc> plotMeshFuncMap;
 
     // Use this for initialization
     void Start()
     {
+        plotMeshFuncMap = new Dictionary<PlotType, PlotMeshFunc>
+        {
+            { PlotType.Land, AddLandPlotMesh },
+            { PlotType.Water, AddWaterPlotMesh },
+            { PlotType.Coast, AddCoastPlotMesh },
+        };
+
         GenerateMap();
     }
 
@@ -78,20 +95,54 @@ public class Terrain : MonoBehaviour
         {
             for (int x = 0; x < MapWidth; x++)
             {
+                var idx = GetIndex(x, y);
                 PlotType plot = PlotType.Land;
-                if (HeightMap[GetIndex(x, y)] <= GetHeight(WaterLevel))
+                if (HeightMap[idx] <= GetHeight(WaterLevel))
                     plot = PlotType.Water;
 
-                PlotMap[GetIndex(x, y)] = plot;
+                PlotMap[idx] = plot;
             }
         }
+
+        // third pass, add features such as coastline
+        for (int y = 0; y < MapHeight; y++)
+        {
+            for (int x = 0; x < MapWidth; x++)
+            {
+                var idx = GetIndex(x, y);
+                if (PlotMap[idx] == PlotType.Water && HasPlotTypeAsNeighbour(x, y, PlotType.Land))
+                {
+                    PlotMap[idx] = PlotType.Coast;
+                }
+            }
+        }
+    }
+
+    bool HasPlotTypeAsNeighbour(int x, int y, PlotType type)
+    {
+        var xMin = Mathf.Max(x - 1, 0);
+        var xMax = Mathf.Min(x + 1, MapWidth - 1);
+        var yMin = Mathf.Max(y - 1, 0);
+        var yMax = Mathf.Min(y + 1, MapHeight - 1);
+
+        for (int yy = yMin; yy <= yMax; yy++)
+        {
+            for (int xx = xMin; xx <= xMax; xx++)
+            {
+                if (xx == x && yy == y)
+                    continue;
+
+                if (PlotMap[GetIndex(xx, yy)] == type)
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     float[] GetDiamondSquareMap()
     {
         Random.seed = Seed;
-        if (MapHeight > MapWidth)
-            MapHeight = MapWidth; // height must be at most equal to width, noise uses width as its maximum to allow wrapping
 
         var heights = new float[MapWidth * MapHeight];
         var left = 0;
@@ -99,9 +150,13 @@ public class Terrain : MonoBehaviour
         var top = 0;
         var bottom = MapHeight - 1;
 
-        var baseHeight = 1000f;
+        var baseHeight = 100f;
 
         DiamondSquareR(ref heights, left, top, right, bottom, baseHeight);
+
+        Random.seed = Seed + 1;
+        DiamondSquareR(ref heights, left, top, right, bottom, baseHeight);
+        Random.seed = Seed;
 
         return heights;
     }
@@ -112,22 +167,39 @@ public class Terrain : MonoBehaviour
         int yc = (int)Mathf.Floor((top + bottom) / 2);
 
         // diamond step
-        
-        var cv = Mathf.Floor(
-            (
-                map[GetIndex(left, top)] +
-                map[GetIndex(right, top)] +
-                map[GetIndex(left, bottom)] +
-                map[GetIndex(right, bottom)]
-            ) / 4
-        ) - (Mathf.Floor(Random.Range(0f, 1f) - 0.5f) * baseHeight * 2);
-        
+
+        var cv = 0f;
+
+        if (left == 0 && top == 0 && right == MapWidth - 1 && bottom == MapHeight - 1)
+        {
+            cv = baseHeight;
+        }
+        else
+        {
+            cv = Mathf.Floor(
+                (
+                    map[GetIndex(left, top)] +
+                    map[GetIndex(right, top)] +
+                    map[GetIndex(left, bottom)] +
+                    map[GetIndex(right, bottom)]
+                ) / 4
+            ) - (Mathf.Floor(Random.Range(0f, 1f) - 0.5f) * baseHeight * 2);
+        }
         map[GetIndex(xc, yc)] = cv;
 
         // square step
 
-        map[GetIndex(xc, top)] = Mathf.Floor(map[GetIndex(left, top)] + map[GetIndex(right, top)]) / 2 + ((Random.Range(0f, 1f) - 0.5f) * baseHeight);
-        map[GetIndex(xc, bottom)] = Mathf.Floor(map[GetIndex(left, bottom)] + map[GetIndex(right, bottom)]) / 2 + ((Random.Range(0f, 1f) - 0.5f) * baseHeight);
+        // ensure top and bottom are seed to zero, so ground slopes into water near poles 
+        if (top != 0)
+            map[GetIndex(xc, top)] = Mathf.Floor(map[GetIndex(left, top)] + map[GetIndex(right, top)]) / 2 + ((Random.Range(0f, 1f) - 0.5f) * baseHeight);
+        else
+            map[GetIndex(xc, top)] = 0f;
+
+        if (bottom != MapHeight - 1)
+            map[GetIndex(xc, bottom)] = Mathf.Floor(map[GetIndex(left, bottom)] + map[GetIndex(right, bottom)]) / 2 + ((Random.Range(0f, 1f) - 0.5f) * baseHeight);
+        else
+            map[GetIndex(xc, bottom)] = 0f;
+
         map[GetIndex(left, yc)] = Mathf.Floor(map[GetIndex(left, top)] + map[GetIndex(left, bottom)]) / 2 + ((Random.Range(0f, 1f) - 0.5f) * baseHeight);
         map[GetIndex(right, yc)] = Mathf.Floor(map[GetIndex(right, top)] + map[GetIndex(right, bottom)]) / 2 + ((Random.Range(0f, 1f) - 0.5f) * baseHeight);
 
@@ -188,13 +260,13 @@ public class Terrain : MonoBehaviour
         {
             for (int chunkX = 0; chunkX < chunksX; chunkX++)
             {
-                int i = 0;
                 int offsetX = chunkX * ChunkSize;
                 int offsetY = chunkY * ChunkSize;
 
                 var verts = new List<Vector3>();
                 var idxs = new List<int>();
                 var uvs = new List<Vector2>();
+                int vertCount = 0;
 
                 for (int y = 0; y < ChunkSize; y++)
                 {
@@ -203,28 +275,8 @@ public class Terrain : MonoBehaviour
                         var absX = x + offsetX;
                         var absY = y + offsetY;
 
-                        // most everything is at 1f, excepting water and possibly coasts
-                        var height = 1f;// GetHeightAt(x, y);
-                        if (PlotMap[GetIndex(absX, absY)] == PlotType.Water)
-                            continue;
-
-                        verts.Add(new Vector3(x, height, y));
-                        verts.Add(new Vector3(x, height, y + 1));
-                        verts.Add(new Vector3(x + 1, height, y + 1));
-                        verts.Add(new Vector3(x + 1, height, y));
-
-                        uvs.Add(new Vector2(x, y + 1));
-                        uvs.Add(new Vector2(x, y));
-                        uvs.Add(new Vector2(x + 1, y));
-                        uvs.Add(new Vector2(x + 1, y + 1));
-
-                        idxs.Add(i);
-                        idxs.Add(i + 1);
-                        idxs.Add(i + 2);
-                        idxs.Add(i + 2);
-                        idxs.Add(i + 3);
-                        idxs.Add(i);
-                        i += 4;
+                        var plot = PlotMap[GetIndex(absX, absY)];
+                        plotMeshFuncMap[plot](x, y, absX, absY, verts, idxs, uvs, null, null, ref vertCount);
                     }
                 }
 
@@ -247,6 +299,108 @@ public class Terrain : MonoBehaviour
                 chunk.Material.color = new Color(chunkX / (float)chunksX, chunkY / (float)chunksY, 0f, 1f);
 
                 chunks.Add(chunk);
+            }
+        }
+    }
+
+    void AddLandPlotMesh(int x, int y, int absX, int absY, List<Vector3> verts, List<int> idxs, List<Vector2> uv1, List<Vector2> uv2, List<Vector3> normals, ref int vertCount)
+    {
+        var height = 1f;
+
+        verts.Add(new Vector3(x, height, y));
+        verts.Add(new Vector3(x, height, y + 1));
+        verts.Add(new Vector3(x + 1, height, y + 1));
+        verts.Add(new Vector3(x + 1, height, y));
+
+        uv1.Add(new Vector2(absX, absY + 1));
+        uv1.Add(new Vector2(absX, absY));
+        uv1.Add(new Vector2(absX + 1, absY));
+        uv1.Add(new Vector2(absX + 1, absY + 1));
+
+        idxs.Add(vertCount);
+        idxs.Add(vertCount + 1);
+        idxs.Add(vertCount + 2);
+        idxs.Add(vertCount + 2);
+        idxs.Add(vertCount + 3);
+        idxs.Add(vertCount);
+        vertCount += 4;
+    }
+
+    void AddWaterPlotMesh(int x, int y, int absX, int absY, List<Vector3> verts, List<int> idxs, List<Vector2> uv1, List<Vector2> uv2, List<Vector3> normals, ref int vertCount)
+    {
+        var height = 0f;
+
+        verts.Add(new Vector3(x, height, y));
+        verts.Add(new Vector3(x, height, y + 1));
+        verts.Add(new Vector3(x + 1, height, y + 1));
+        verts.Add(new Vector3(x + 1, height, y));
+
+        uv1.Add(new Vector2(x, y + 1));
+        uv1.Add(new Vector2(x, y));
+        uv1.Add(new Vector2(x + 1, y));
+        uv1.Add(new Vector2(x + 1, y + 1));
+
+        idxs.Add(vertCount);
+        idxs.Add(vertCount + 1);
+        idxs.Add(vertCount + 2);
+        idxs.Add(vertCount + 2);
+        idxs.Add(vertCount + 3);
+        idxs.Add(vertCount);
+        vertCount += 4;
+    }
+
+    void AddCoastPlotMesh(int x, int y, int absX, int absY, List<Vector3> verts, List<int> idxs, List<Vector2> uv1, List<Vector2> uv2, List<Vector3> normals, ref int vertCount)
+    {
+        var height = 0.5f;
+
+        var vertsAcross = 15;
+        var vertsMiddle = vertsAcross / 2;
+
+        var localMap = new float[9];
+        for (int localY = -1; localY <= 1; localY++)
+        {
+            for (int localX = -1; localX <= 1; localX++)
+            {
+                var relX = absX + localX;
+                var relY = absY + localY;
+                var idx = 4 + (localY * 3 + localX);
+
+                if (relX < 0 || relX < 0 || relY > MapWidth || relY > MapHeight)
+                    localMap[idx] = 0f;
+
+                localMap[idx] = PlotHeights[PlotMap[GetIndex(relX, relY)]];
+            }
+        }
+
+        var curr = localMap[4];
+        var prevX = localMap[3];
+        var nextX = localMap[5];
+        var prevY = localMap[1];
+        var nextY = localMap[7];
+
+        for (int innerY = 0; innerY < vertsAcross; innerY++)
+        {
+            for (int innerX = 0; innerX < vertsAcross; innerX++)
+            {
+                var posX = (innerX / (vertsAcross - 1f));
+                var posY = (innerY / (vertsAcross - 1f));
+                
+                height = Mathf.SmoothStep(prevX, nextX, posX);
+
+                verts.Add(new Vector3(posX + x, height, posY + y));
+                uv1.Add(new Vector2(posX + absX, posY + absY));
+
+                if (innerX < vertsAcross - 1 && innerY < vertsAcross - 1)
+                {
+                    idxs.Add(vertCount);
+                    idxs.Add(vertCount + vertsAcross);
+                    idxs.Add(vertCount + vertsAcross + 1);
+
+                    idxs.Add(vertCount + vertsAcross + 1);
+                    idxs.Add(vertCount + 1);
+                    idxs.Add(vertCount);
+                }
+                vertCount++;
             }
         }
     }
